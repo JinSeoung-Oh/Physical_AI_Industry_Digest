@@ -1,0 +1,29 @@
+name: Physical AI Chat Digest
+
+on:
+  schedule:
+    # 매일 오전 10시 KST = UTC 01:00
+    - cron: "0 1 * * *"
+  workflow_dispatch:  # 수동 실행 버튼 (테스트용)
+
+jobs:
+  send-digest:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: pip install anthropic feedparser requests
+
+      - name: Run digest
+        env:
+          ANTHROPIC_API_KEY:    ${{ secrets.ANTHROPIC_API_KEY }}
+          GOOGLE_CHAT_WEBHOOK:  ${{ secrets.GOOGLE_CHAT_WEBHOOK }}
+        run: python chat_digest.py
