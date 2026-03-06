@@ -9,10 +9,10 @@ Physical AI Industry Digest → Google Chat
 2. 날짜 없는 기사 스킵 (기존엔 날짜 없으면 필터 통과)
 3. since 기준: 실행 시각 KST 기준 24시간 전 (매일 10시 실행 시 어제 10시 ~ 오늘 10시)
 4. 기사 없을 때 메시지: 해외/국내 각각 구분해서 안내
-5. RSS 소스 추가 (TechCrunch Robotics, NVIDIA Blog, arXiv cs.RO, Crunchbase News,
+5. RSS 소스 추가 (TechCrunch Robotics, NVIDIA Blog, Crunchbase News,
    Bloomberg Tech, 한국경제 IT, 인공지능신문, 블로터)
    - 전자신문: allArticle → 속보(Section902) 피드로 교체
-   - MIT Technology Review 제거 (PhysicalAI 관련도 낮음)
+   - MIT Technology Review, arXiv cs.RO 제거 (각각 관련도 낮음 / 학술 논문 위주)
 6. 키워드 정리: 중복 제거, 신규 추가
    - 추가(영문): Skild AI, Gemini Robotics, Isaac Lab, Cosmos Reason, Newton physics,
                  Electric Atlas, generalist policy, robot foundation model, VLA model
@@ -41,8 +41,8 @@ KST = ZoneInfo("Asia/Seoul")
 
 # ─────────────────────────────────────────────
 # RSS 소스 - 해외
-# 제거: MIT Technology Review (PhysicalAI 관련도 낮음)
-# 추가: TechCrunch Robotics, NVIDIA Blog, arXiv cs.RO, Crunchbase News, Bloomberg Tech
+# 제거: MIT Technology Review (PhysicalAI 관련도 낮음), arXiv cs.RO (학술 논문 위주)
+# 추가: TechCrunch Robotics, NVIDIA Blog, Crunchbase News, Bloomberg Tech, Reuters Technology, Financial Times Tech
 # ─────────────────────────────────────────────
 GLOBAL_SOURCES = [
     {
@@ -78,6 +78,16 @@ GLOBAL_SOURCES = [
     {
         "name": "NVIDIA Blog",
         "url": "https://blogs.nvidia.com/feed/",
+        "region": "해외",
+    },
+    {
+        "name": "Reuters Technology",
+        "url": "https://feeds.reuters.com/reuters/technologyNews",
+        "region": "해외",
+    },
+    {
+        "name": "Financial Times Tech",
+        "url": "https://www.ft.com/technology?format=rss",
         "region": "해외",
     },
     {
@@ -310,23 +320,27 @@ def rank_items(items: list[dict], top_n: int, region: str) -> list[dict]:
     for i, item in enumerate(items, 1):
         items_text += f"[{i}] {item['title']}\n{item['summary'][:200]}\n---\n"
 
-    prompt = f"""PhysicalAI/VLA 산업 동향을 모니터링하는 사업 담당자입니다.
-아래 {len(items)}개 ({region}) 기사 중 사업적으로 가장 중요한 {top_n}개 번호를 골라주세요.
+    prompt = f"""당신은 Physical AI / 휴머노이드 로봇 산업의 사업 개발 담당자입니다.
+아래 {len(items)}개 ({region}) 기사 중 비즈니스·산업적으로 가장 임팩트 있는 {top_n}개를 선별해주세요.
 
-높은 우선순위:
-- 주요 기업의 VLA/Physical AI 제품 출시, 파트너십, 투자 유치
-- 국내외 주요 기업 전략 변화
-- 시장 판도를 바꿀 기술/정책 발표
-- 국내 기업의 Physical AI 관련 동향
+━ 높은 우선순위 (비즈니스 임팩트 큰 것) ━
+✅ 투자 유치 / 펀딩 / IPO / M&A
+✅ 제품 출시 / 상용화 / 파일럿 계약 / 양산 발표
+✅ 대형 파트너십 / 고객사 계약 (제조·물류·국방 등)
+✅ 주요 기업의 전략 피벗 또는 사업 확장
+✅ 정부 정책 / 규제 변화 (보조금, 로드맵, 표준)
+✅ 시장 판도를 바꿀 경쟁 구도 변화
 
-낮은 우선순위:
-- 단순 기술 벤치마크
-- 순수 하드웨어 스펙 발표
-- 로봇 시장 통계/수치만 다루는 기사
+━ 낮은 우선순위 (비즈니스 임팩트 낮은 것) ━
+❌ 학술 논문 / 연구소 발표 (상용화 계획 없는 것)
+❌ 단순 기술 벤치마크 / 성능 수치 비교
+❌ 순수 하드웨어 스펙 발표
+❌ 시장 통계·수치만 나열한 리포트
+❌ 이미 알려진 사실의 단순 반복 기사
 
 {items_text}
 
-중요한 순서대로 {top_n}개 번호만 콤마로 출력. 예: 2,5,1,3,4
+비즈니스 임팩트가 높은 순서대로 {top_n}개 번호만 콤마로 출력. 예: 2,5,1,3,4
 번호 외 다른 텍스트 없이."""
 
     msg = client.messages.create(
