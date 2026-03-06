@@ -1,6 +1,6 @@
 """
 Physical AI Industry Digest → Google Chat
-- 해외 5개 + 국내 5개 소스 수집
+- 해외 + 국내 소스 수집
 - Claude API로 사업적 관점 요약 + 중요도 랭킹
 - Google Chat 웹훅으로 매일 전송
 
@@ -9,6 +9,15 @@ Physical AI Industry Digest → Google Chat
 2. 날짜 없는 기사 스킵 (기존엔 날짜 없으면 필터 통과)
 3. since 기준: 실행 시각 KST 기준 24시간 전 (매일 10시 실행 시 어제 10시 ~ 오늘 10시)
 4. 기사 없을 때 메시지: 해외/국내 각각 구분해서 안내
+5. RSS 소스 추가 (TechCrunch Robotics, NVIDIA Blog, arXiv cs.RO, Crunchbase News,
+   Bloomberg Tech, 한국경제 IT, 인공지능신문, 블로터)
+   - 전자신문: allArticle → 속보(Section902) 피드로 교체
+   - MIT Technology Review 제거 (PhysicalAI 관련도 낮음)
+6. 키워드 정리: 중복 제거, 신규 추가
+   - 추가(영문): Skild AI, Gemini Robotics, Isaac Lab, Cosmos Reason, Newton physics,
+                 Electric Atlas, generalist policy, robot foundation model, VLA model
+   - 추가(국내): 뉴로메카, 로보티즈, KAIST 로봇, KIST 로봇, K-휴머노이드,
+                 피지컬 AI, 로봇 파운데이션, 제조 AX, 로봇 IPO, 로봇 상장
 """
 
 import os
@@ -32,11 +41,18 @@ KST = ZoneInfo("Asia/Seoul")
 
 # ─────────────────────────────────────────────
 # RSS 소스 - 해외
+# 제거: MIT Technology Review (PhysicalAI 관련도 낮음)
+# 추가: TechCrunch Robotics, NVIDIA Blog, arXiv cs.RO, Crunchbase News, Bloomberg Tech
 # ─────────────────────────────────────────────
 GLOBAL_SOURCES = [
     {
         "name": "TechCrunch AI",
         "url": "https://techcrunch.com/category/artificial-intelligence/feed/",
+        "region": "해외",
+    },
+    {
+        "name": "TechCrunch Robotics",
+        "url": "https://techcrunch.com/category/robotics/feed/",
         "region": "해외",
     },
     {
@@ -55,28 +71,45 @@ GLOBAL_SOURCES = [
         "region": "해외",
     },
     {
-        "name": "MIT Technology Review AI",
-        "url": "https://www.technologyreview.com/topic/artificial-intelligence/feed",
+        "name": "Wired AI",
+        "url": "https://www.wired.com/feed/tag/ai/latest/rss",
         "region": "해외",
     },
     {
-        "name": "Wired AI",
-        "url": "https://www.wired.com/feed/tag/ai/latest/rss",
+        "name": "NVIDIA Blog",
+        "url": "https://blogs.nvidia.com/feed/",
+        "region": "해외",
+    },
+    {
+        "name": "arXiv cs.RO",
+        "url": "https://rss.arxiv.org/rss/cs.RO",
+        "region": "해외",
+    },
+    {
+        "name": "Crunchbase News",
+        "url": "https://news.crunchbase.com/feed/",
+        "region": "해외",
+    },
+    {
+        "name": "Bloomberg Tech",
+        "url": "https://feeds.bloomberg.com/technology/news.rss",
         "region": "해외",
     },
 ]
 
 # ─────────────────────────────────────────────
 # RSS 소스 - 국내
+# 전자신문: 속보 피드(Section902)로 교체
+# 추가: 한국경제 IT, 인공지능신문, 블로터
 # ─────────────────────────────────────────────
 KOREA_SOURCES = [
     {
         "name": "전자신문",
-        "url": "https://www.etnews.com/rss/allArticleRss.xml",
+        "url": "http://rss.etnews.co.kr/Section902.xml",
         "region": "국내",
     },
     {
-        "name": "ZDNet Korea AI",
+        "name": "ZDNet Korea",
         "url": "https://zdnet.co.kr/rss/rss.aspx?kind=1",
         "region": "국내",
     },
@@ -91,8 +124,23 @@ KOREA_SOURCES = [
         "region": "국내",
     },
     {
+        "name": "인공지능신문",
+        "url": "http://www.aitimes.kr/rss/allArticle.xml",
+        "region": "국내",
+    },
+    {
         "name": "로봇신문",
         "url": "http://www.irobotnews.com/rss/allArticle.xml",
+        "region": "국내",
+    },
+    {
+        "name": "한국경제 IT",
+        "url": "https://www.hankyung.com/feed/it",
+        "region": "국내",
+    },
+    {
+        "name": "블로터",
+        "url": "https://www.bloter.net/feed",
         "region": "국내",
     },
 ]
@@ -101,27 +149,75 @@ ALL_SOURCES = GLOBAL_SOURCES + KOREA_SOURCES
 
 # ─────────────────────────────────────────────
 # 필터 키워드 - PhysicalAI/VLA 산업 흐름
+#
+# [영문 우선순위]
+# 1. "physical AI" / "embodied AI" robotics
+# 2. "humanoid robot" funding / investment / Series
+# 3. "vision language action" / "VLA model" robotics
+# 4. NVIDIA GR00T / Isaac Lab / Cosmos Reason / Newton physics
+# 5. Figure AI / Physical Intelligence / Skild AI / Apptronik
+# 6. Google DeepMind "Gemini Robotics"
+# 7. Tesla Optimus
+# 8. humanoid robot China / Agibot / Unitree / UBTECH
+# 9. "robot foundation model" / "generalist policy"
+# 10. Boston Dynamics Atlas / Electric Atlas
+#
+# [한국어 우선순위]
+# 1. 휴머노이드 로봇 + (투자 / 개발 / 출시)
+# 2. 피지컬 AI / Physical AI 한국
+# 3. 레인보우로보틱스 / 삼성 로봇 / 두산로보틱스
+# 4. K-휴머노이드 / 제조 AX / 로봇 파운데이션
+# 5. 로봇 IPO / 로봇 상장 / 로봇 투자
+# 6. KAIST 로봇 / KIST 로봇 / 뉴로메카 / 로보티즈
 # ─────────────────────────────────────────────
 INCLUDE_KEYWORDS = [
-    # VLA / Physical AI 핵심
+    # ── VLA / Physical AI 핵심 ──
     "physical ai", "physical intelligence",
-    "vision language action", "VLA",
     "embodied ai", "embodied intelligence",
+    "vision language action", "vla model", "VLA",
+    "robot foundation model", "generalist policy",
+    "robot learning",
+
+    # ── 주요 기업 / 모델 ──
+    "Figure AI", "Figure robot",
+    "Physical Intelligence", "pi0", "openpi",
+    "Skild AI",
+    "Apptronik",
+    "Sanctuary", "Sanctuary AI",
+    "Boston Dynamics", "Electric Atlas",
+    "Agility", "Agility Robotics",
+    "1X", "1X Technologies",
+    "Unitree", "UBTECH", "Agibot",
+    "Fourier", "Fourier Intelligence",
+    "NVIDIA Isaac", "Isaac Lab", "GR00T", "Cosmos Reason", "Newton physics",
+    "Tesla Optimus", "Optimus robot",
+    "Google DeepMind", "Gemini Robotics",
+
+    # ── 휴머노이드 / 투자 ──
     "humanoid", "휴머노이드",
-    "foundation model", "robot learning",
-    # 기업/산업 동향
-    "Figure", "1X", "Agility", "Boston Dynamics",
-    "Apptronik", "Sanctuary", "Unitree", "Fourier",
-    "NVIDIA Isaac", "GR00T", "pi0", "openpi",
-    "Tesla Optimus", "Optimus",
-    # 투자/사업
-    "로봇 투자", "로봇 스타트업", "robot startup",
-    "robot investment", "robot funding",
+    "robot investment", "robot funding", "robot startup",
+    "humanoid funding", "humanoid investment",
     "AI robot", "AI 로봇",
-    # 국내 기업
-    "레인보우로보틱스", "두산로보틱스", "현대로보틱스",
-    "삼성 로봇", "LG 로봇", "카카오 로봇",
-    "네이버 로봇", "클로이",
+
+    # ── 국내 기업 / 기관 ──
+    "레인보우로보틱스",
+    "두산로보틱스",
+    "현대로보틱스",
+    "삼성 로봇",
+    "LG 로봇", "클로이",
+    "카카오 로봇",
+    "네이버 로봇",
+    "뉴로메카",
+    "로보티즈",
+    "KAIST 로봇", "KIST 로봇",
+
+    # ── 국내 산업 / 정책 ──
+    "K-휴머노이드",
+    "피지컬 AI",
+    "로봇 파운데이션",
+    "제조 AX",
+    "로봇 IPO", "로봇 상장", "로봇 투자",
+    "로봇 스타트업",
 ]
 
 EXCLUDE_KEYWORDS = [
@@ -129,9 +225,11 @@ EXCLUDE_KEYWORDS = [
     "용접 로봇", "산업용 로봇 arm",
     "CNC", "PLC", "반도체 장비",
     "수술 로봇 장비", "surgical instrument",
-    # 무관한 AI
-    "챗봇", "chatbot", "text generation",
-    "image generation", "stable diffusion",
+    # PhysicalAI 무관 AI
+    "챗봇", "chatbot",
+    "text generation", "image generation",
+    "stable diffusion",
+    # 금융/무관
     "stock market", "crypto",
 ]
 
@@ -147,12 +245,10 @@ def is_relevant(title: str, summary: str) -> bool:
 
 # ─────────────────────────────────────────────
 # RSS 수집
-# [수정] since = 실행 시각 KST 기준 24시간 전
-# [수정] published 없는 기사는 스킵
+# since = 실행 시각 KST 기준 24시간 전
+# published 없는 기사는 스킵
 # ─────────────────────────────────────────────
 def fetch_items() -> tuple[list[dict], list[dict]]:
-    # 실행 시각(KST) 기준 24시간 전을 UTC로 변환해 기준으로 사용
-    # 예: 오전 10시 실행 → 어제 오전 10시 이후 기사 수집
     since = (
         datetime.now(KST) - timedelta(hours=24)
     ).astimezone(timezone.utc)
@@ -176,7 +272,6 @@ def fetch_items() -> tuple[list[dict], list[dict]]:
                 continue
             seen.add(link)
 
-            # [수정] 날짜 없으면 스킵 (기존엔 날짜 없으면 필터 통과)
             published = entry.get("published_parsed") or entry.get("updated_parsed")
             if not published:
                 continue
@@ -310,7 +405,6 @@ JSON 배열만 출력:
 
 # ─────────────────────────────────────────────
 # Google Chat 메시지 전송
-# [수정] 해외/국내 각각 없을 때 구분 안내
 # ─────────────────────────────────────────────
 def send_to_chat(global_items: list[dict], korea_items: list[dict]):
     today = datetime.now(KST).strftime("%Y.%m.%d")
@@ -331,7 +425,6 @@ def send_to_chat(global_items: list[dict], korea_items: list[dict]):
             f"📰 {item['source']} · <{item['url']}|원문 보기>"
         )
 
-    # 해외 섹션
     if global_items:
         global_section = "━━━ 🌐 *해외 동향* ━━━\n\n"
         for i, item in enumerate(global_items, 1):
@@ -339,7 +432,6 @@ def send_to_chat(global_items: list[dict], korea_items: list[dict]):
     else:
         global_section = f"━━━ 🌐 *해외 동향* ━━━\n\n📭 {today} 날짜의 해외 최신 기사가 없습니다.\n\n"
 
-    # 국내 섹션
     if korea_items:
         korea_section = "━━━ 🇰🇷 *국내 동향* ━━━\n\n"
         for i, item in enumerate(korea_items, 1):
@@ -347,7 +439,6 @@ def send_to_chat(global_items: list[dict], korea_items: list[dict]):
     else:
         korea_section = f"━━━ 🇰🇷 *국내 동향* ━━━\n\n📭 {today} 날짜의 국내 최신 기사가 없습니다.\n\n"
 
-    # 둘 다 없으면 심플하게
     if not global_items and not korea_items:
         full_text = f"🤖 *Physical AI Digest* — {today}\n📭 {today} 날짜의 최신 기사가 없습니다."
     else:
@@ -373,18 +464,14 @@ def send_to_chat(global_items: list[dict], korea_items: list[dict]):
 if __name__ == "__main__":
     print("[START] Physical AI Chat Digest 시작")
 
-    # 수집
     global_raw, korea_raw = fetch_items()
 
-    # 랭킹 (해외 5개, 국내 5개)
     global_top = rank_items(global_raw, top_n=5, region="해외")
     korea_top  = rank_items(korea_raw,  top_n=5, region="국내")
 
-    # 요약
     global_top = summarize_items(global_top)
     korea_top  = summarize_items(korea_top)
 
-    # 전송
     send_to_chat(global_top, korea_top)
 
     print("[DONE] 완료")
