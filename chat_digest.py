@@ -3,6 +3,12 @@ Physical AI Industry Digest → Google Chat
 - 해외 5개 + 국내 5개 소스 수집
 - Claude API로 사업적 관점 요약 + 중요도 랭킹
 - Google Chat 웹훅으로 매일 전송
+
+[수정 사항]
+1. since 계산: DAYS_BACK + 1 → DAYS_BACK (범위 축소)
+2. 날짜 없는 기사 스킵 (기존엔 날짜 없으면 필터 통과)
+3. since 기준: 오늘 KST 자정 고정 (실행 시각 무관하게 오늘 기사만)
+4. 기사 없을 때 메시지: 해외/국내 각각 구분해서 안내
 """
 
 import os
@@ -12,16 +18,17 @@ import requests
 import feedparser
 import anthropic
 from datetime import datetime, timedelta, timezone
+from zoneinfo import ZoneInfo
 
 # ─────────────────────────────────────────────
 # 설정
 # ─────────────────────────────────────────────
-ANTHROPIC_API_KEY  = os.environ["ANTHROPIC_API_KEY"]
+ANTHROPIC_API_KEY   = os.environ["ANTHROPIC_API_KEY"]
 GOOGLE_CHAT_WEBHOOK = os.environ["GOOGLE_CHAT_WEBHOOK"]
 
 MAX_FETCH = 40   # 수집 후보
 MAX_ITEMS = 10   # 최종 전송 (해외 5 + 국내 5)
-DAYS_BACK = 1
+KST = ZoneInfo("Asia/Seoul")
 
 # ─────────────────────────────────────────────
 # RSS 소스 - 해외
@@ -140,9 +147,17 @@ def is_relevant(title: str, summary: str) -> bool:
 
 # ─────────────────────────────────────────────
 # RSS 수집
+# [수정] since = 오늘 KST 자정 기준 (실행 시각 무관)
+# [수정] published 없는 기사는 스킵
 # ─────────────────────────────────────────────
 def fetch_items() -> tuple[list[dict], list[dict]]:
-    since = datetime.now(timezone.utc) - timedelta(days=DAYS_BACK + 1)
+    # 오늘 KST 자정을 UTC로 변환해 기준으로 사용
+    since = (
+        datetime.now(KST)
+        .replace(hour=0, minute=0, second=0, microsecond=0)
+        .astimezone(timezone.utc)
+    )
+
     global_items, korea_items = [], []
     seen = set()
 
@@ -162,11 +177,13 @@ def fetch_items() -> tuple[list[dict], list[dict]]:
                 continue
             seen.add(link)
 
+            # [수정] 날짜 없으면 스킵 (기존엔 날짜 없으면 필터 통과)
             published = entry.get("published_parsed") or entry.get("updated_parsed")
-            if published:
-                pub_dt = datetime(*published[:6], tzinfo=timezone.utc)
-                if pub_dt < since:
-                    continue
+            if not published:
+                continue
+            pub_dt = datetime(*published[:6], tzinfo=timezone.utc)
+            if pub_dt < since:
+                continue
 
             clean_summary = re.sub(r"<[^>]+>", " ", summary).strip()
 
@@ -241,7 +258,6 @@ def rank_items(items: list[dict], top_n: int, region: str) -> list[dict]:
 # Claude 요약 생성
 # ─────────────────────────────────────────────
 def summarize_items(items: list[dict]) -> list[dict]:
-    """각 아이템에 한국어 사업적 요약 추가"""
     if not items:
         return []
 
@@ -295,21 +311,21 @@ JSON 배열만 출력:
 
 # ─────────────────────────────────────────────
 # Google Chat 메시지 전송
+# [수정] 해외/국내 각각 없을 때 구분 안내
 # ─────────────────────────────────────────────
 def send_to_chat(global_items: list[dict], korea_items: list[dict]):
-    today = datetime.now().strftime("%Y.%m.%d")
+    today = datetime.now(KST).strftime("%Y.%m.%d")
     total = len(global_items) + len(korea_items)
 
-    # ── 헤더 카드
     header_text = (
         f"🤖 *Physical AI & VLA 산업 동향* — {today}\n"
         f"해외 {len(global_items)}건 + 국내 {len(korea_items)}건 · 중요도 순 큐레이션"
     )
 
     def item_to_text(item: dict, rank: int) -> str:
-        emoji = item.get("emoji", "📌")
+        emoji    = item.get("emoji", "📌")
         one_line = item.get("one_line", item["title"])
-        why = item.get("why_matters", "")
+        why      = item.get("why_matters", "")
         return (
             f"{emoji} *{rank}. {one_line}*\n"
             f"{why}\n"
@@ -317,18 +333,24 @@ def send_to_chat(global_items: list[dict], korea_items: list[dict]):
         )
 
     # 해외 섹션
-    global_section = "━━━ 🌐 *해외 동향* ━━━\n\n"
-    for i, item in enumerate(global_items, 1):
-        global_section += item_to_text(item, i) + "\n\n"
+    if global_items:
+        global_section = "━━━ 🌐 *해외 동향* ━━━\n\n"
+        for i, item in enumerate(global_items, 1):
+            global_section += item_to_text(item, i) + "\n\n"
+    else:
+        global_section = "━━━ 🌐 *해외 동향* ━━━\n\n📭 {today} 날짜의 해외 최신 기사가 없습니다.\n\n".format(today=today)
 
     # 국내 섹션
-    korea_section = "━━━ 🇰🇷 *국내 동향* ━━━\n\n"
-    for i, item in enumerate(korea_items, 1):
-        korea_section += item_to_text(item, i) + "\n\n"
+    if korea_items:
+        korea_section = "━━━ 🇰🇷 *국내 동향* ━━━\n\n"
+        for i, item in enumerate(korea_items, 1):
+            korea_section += item_to_text(item, i) + "\n\n"
+    else:
+        korea_section = "━━━ 🇰🇷 *국내 동향* ━━━\n\n📭 {today} 날짜의 국내 최신 기사가 없습니다.\n\n".format(today=today)
 
-    # 오늘 없으면 안내
+    # 둘 다 없으면 심플하게
     if not global_items and not korea_items:
-        full_text = f"🤖 *Physical AI Digest* — {today}\n오늘은 관련 업데이트가 없습니다."
+        full_text = f"🤖 *Physical AI Digest* — {today}\n📭 {today} 날짜의 최신 기사가 없습니다."
     else:
         full_text = f"{header_text}\n\n{global_section}{korea_section}"
 
