@@ -81,11 +81,6 @@ GLOBAL_SOURCES = [
         "region": "해외",
     },
     {
-        "name": "arXiv cs.RO",
-        "url": "https://rss.arxiv.org/rss/cs.RO",
-        "region": "해외",
-    },
-    {
         "name": "Crunchbase News",
         "url": "https://news.crunchbase.com/feed/",
         "region": "해외",
