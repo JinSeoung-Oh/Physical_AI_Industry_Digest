@@ -270,7 +270,7 @@ JSON 배열만 출력:
 
     msg = client.messages.create(
         model="claude-sonnet-4-20250514",
-        max_tokens=2000,
+        max_tokens=8000,
         messages=[{"role": "user", "content": prompt}],
     )
 
