@@ -7,7 +7,7 @@ Physical AI Industry Digest → Google Chat
 [수정 사항]
 1. since 계산: DAYS_BACK + 1 → DAYS_BACK (범위 축소)
 2. 날짜 없는 기사 스킵 (기존엔 날짜 없으면 필터 통과)
-3. since 기준: 오늘 KST 자정 고정 (실행 시각 무관하게 오늘 기사만)
+3. since 기준: 실행 시각 KST 기준 24시간 전 (매일 10시 실행 시 어제 10시 ~ 오늘 10시)
 4. 기사 없을 때 메시지: 해외/국내 각각 구분해서 안내
 """
 
@@ -147,16 +147,15 @@ def is_relevant(title: str, summary: str) -> bool:
 
 # ─────────────────────────────────────────────
 # RSS 수집
-# [수정] since = 오늘 KST 자정 기준 (실행 시각 무관)
+# [수정] since = 실행 시각 KST 기준 24시간 전
 # [수정] published 없는 기사는 스킵
 # ─────────────────────────────────────────────
 def fetch_items() -> tuple[list[dict], list[dict]]:
-    # 오늘 KST 자정을 UTC로 변환해 기준으로 사용
+    # 실행 시각(KST) 기준 24시간 전을 UTC로 변환해 기준으로 사용
+    # 예: 오전 10시 실행 → 어제 오전 10시 이후 기사 수집
     since = (
-        datetime.now(KST)
-        .replace(hour=0, minute=0, second=0, microsecond=0)
-        .astimezone(timezone.utc)
-    )
+        datetime.now(KST) - timedelta(hours=24)
+    ).astimezone(timezone.utc)
 
     global_items, korea_items = [], []
     seen = set()
@@ -338,7 +337,7 @@ def send_to_chat(global_items: list[dict], korea_items: list[dict]):
         for i, item in enumerate(global_items, 1):
             global_section += item_to_text(item, i) + "\n\n"
     else:
-        global_section = "━━━ 🌐 *해외 동향* ━━━\n\n📭 {today} 날짜의 해외 최신 기사가 없습니다.\n\n".format(today=today)
+        global_section = f"━━━ 🌐 *해외 동향* ━━━\n\n📭 {today} 날짜의 해외 최신 기사가 없습니다.\n\n"
 
     # 국내 섹션
     if korea_items:
@@ -346,7 +345,7 @@ def send_to_chat(global_items: list[dict], korea_items: list[dict]):
         for i, item in enumerate(korea_items, 1):
             korea_section += item_to_text(item, i) + "\n\n"
     else:
-        korea_section = "━━━ 🇰🇷 *국내 동향* ━━━\n\n📭 {today} 날짜의 국내 최신 기사가 없습니다.\n\n".format(today=today)
+        korea_section = f"━━━ 🇰🇷 *국내 동향* ━━━\n\n📭 {today} 날짜의 국내 최신 기사가 없습니다.\n\n"
 
     # 둘 다 없으면 심플하게
     if not global_items and not korea_items:
