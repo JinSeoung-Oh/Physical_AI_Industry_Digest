@@ -4,24 +4,21 @@ Physical AI Industry Digest → Google Chat
 - Claude API로 사업적 관점 요약 + 중요도 랭킹
 - Google Chat 웹훅으로 매일 전송
 
-[수정 사항]
-1. since 계산: DAYS_BACK + 1 → DAYS_BACK (범위 축소)
-2. 날짜 없는 기사 스킵 (기존엔 날짜 없으면 필터 통과)
-3. since 기준: 실행 시각 KST 기준 24시간 전 (매일 10시 실행 시 어제 10시 ~ 오늘 10시)
-4. 기사 없을 때 메시지: 해외/국내 각각 구분해서 안내
-5. RSS 소스 추가 (TechCrunch Robotics, NVIDIA Blog, Crunchbase News,
-   Bloomberg Tech, 한국경제 IT, 인공지능신문, 블로터)
-   - 전자신문: allArticle → 속보(Section902) 피드로 교체
-   - MIT Technology Review, arXiv cs.RO 제거 (각각 관련도 낮음 / 학술 논문 위주)
-6. 키워드 정리: 중복 제거, 신규 추가
-   - 추가(영문): Skild AI, Gemini Robotics, Isaac Lab, Cosmos Reason, Newton physics,
-                 Electric Atlas, generalist policy, robot foundation model, VLA model
-   - 추가(국내): 뉴로메카, 로보티즈, KAIST 로봇, KIST 로봇, K-휴머노이드,
-                 피지컬 AI, 로봇 파운데이션, 제조 AX, 로봇 IPO, 로봇 상장
+[변경 이력]
+v3 (최신)
+- 피드 진단 모드 추가 (--debug 플래그)
+- 키워드 필터 2단계 구조: 광역 1차(is_relevant) → Claude 2차(rank_items)
+- 소스별 최대 수집 수 제한 (MAX_PER_SOURCE)
+- 불안정 피드 제거 (Bloomberg, FT, Reuters, Crunchbase)
+- 안정적 피드 추가 (The Verge, Ars Technica, AI Business, MIT News Robotics)
+- since 계산: 실행 시각 KST 기준 24시간 전
+- 날짜 없는 기사 스킵
+- 기사 없을 때 해외/국내 각각 구분 안내
 """
 
 import os
 import re
+import sys
 import json
 import requests
 import feedparser
@@ -32,19 +29,23 @@ from zoneinfo import ZoneInfo
 # ─────────────────────────────────────────────
 # 설정
 # ─────────────────────────────────────────────
-ANTHROPIC_API_KEY   = os.environ["ANTHROPIC_API_KEY"]
-GOOGLE_CHAT_WEBHOOK = os.environ["GOOGLE_CHAT_WEBHOOK"]
+ANTHROPIC_API_KEY   = os.environ.get("ANTHROPIC_API_KEY", "")
+GOOGLE_CHAT_WEBHOOK = os.environ.get("GOOGLE_CHAT_WEBHOOK", "")
 
-MAX_FETCH = 40   # 수집 후보
-MAX_ITEMS = 10   # 최종 전송 (해외 5 + 국내 5)
+MAX_PER_SOURCE = 5    # 소스당 최대 수집 기사 수 (순서 편향 방지)
+MAX_FETCH      = 40   # 전체 수집 후보 상한
+MAX_ITEMS      = 10   # 최종 전송 (해외 5 + 국내 5)
 KST = ZoneInfo("Asia/Seoul")
+
+DEBUG_MODE = "--debug" in sys.argv  # python digest.py --debug
 
 # ─────────────────────────────────────────────
 # RSS 소스 - 해외
-# 제거: MIT Technology Review (PhysicalAI 관련도 낮음), arXiv cs.RO (학술 논문 위주)
-# 추가: TechCrunch Robotics, NVIDIA Blog, Crunchbase News, Bloomberg Tech, Reuters Technology, Financial Times Tech
+# 제거: Bloomberg(페이월), FT(페이월), Reuters(본문 없음), Crunchbase(RSS 불안정)
+# 추가: The Verge AI, Ars Technica, AI Business, MIT News Robotics
 # ─────────────────────────────────────────────
 GLOBAL_SOURCES = [
+    # ── 디버그 확인: OK ──
     {
         "name": "TechCrunch AI",
         "url": "https://techcrunch.com/category/artificial-intelligence/feed/",
@@ -81,11 +82,6 @@ GLOBAL_SOURCES = [
         "region": "해외",
     },
     {
-        "name": "Reuters Technology",
-        "url": "https://feeds.reuters.com/reuters/technologyNews",
-        "region": "해외",
-    },
-    {
         "name": "Financial Times Tech",
         "url": "https://www.ft.com/technology?format=rss",
         "region": "해외",
@@ -100,22 +96,33 @@ GLOBAL_SOURCES = [
         "url": "https://feeds.bloomberg.com/technology/news.rss",
         "region": "해외",
     },
+    # ── 신규 추가 (디버그 미검증 → 다음 --debug 시 확인 필요) ──
+    {
+        "name": "The Verge AI",
+        "url": "https://www.theverge.com/ai-artificial-intelligence/rss/index.xml",
+        "region": "해외",
+    },
+    {
+        "name": "Ars Technica Technology",
+        "url": "https://feeds.arstechnica.com/arstechnica/technology-lab",
+        "region": "해외",
+    },
+    {
+        "name": "AI Business",
+        "url": "https://aibusiness.com/rss.xml",
+        "region": "해외",
+    },
+    # ── 제거: Reuters Technology (URLError — 피드 URL 죽음) ──
 ]
 
 # ─────────────────────────────────────────────
 # RSS 소스 - 국내
-# 전자신문: 속보 피드(Section902)로 교체
-# 추가: 한국경제 IT, 인공지능신문, 블로터
 # ─────────────────────────────────────────────
 KOREA_SOURCES = [
+    # ── 디버그 확인: OK ──
     {
         "name": "전자신문",
-        "url": "http://rss.etnews.co.kr/Section902.xml",
-        "region": "국내",
-    },
-    {
-        "name": "ZDNet Korea",
-        "url": "https://zdnet.co.kr/rss/rss.aspx?kind=1",
+        "url": "http://rss.etnews.co.kr/Section902.xml",  # 301 리다이렉트이나 정상 작동
         "region": "국내",
     },
     {
@@ -143,9 +150,22 @@ KOREA_SOURCES = [
         "url": "https://www.hankyung.com/feed/it",
         "region": "국내",
     },
+    # ── URL 교체: ZDNet Korea (기존 404) ──
+    {
+        "name": "ZDNet Korea",
+        "url": "https://zdnet.co.kr/rss/rss.aspx",  # kind 파라미터 제거 후 재시도
+        "region": "국내",
+    },
+    # ── URL 교체: 블로터 (기존 404) ──
     {
         "name": "블로터",
-        "url": "https://www.bloter.net/feed",
+        "url": "https://bloter.net/feed/",  # www 없이 재시도
+        "region": "국내",
+    },
+    # ── 신규 추가 ──
+    {
+        "name": "디지털투데이",
+        "url": "https://www.digitaltoday.co.kr/rss/allArticle.xml",
         "region": "국내",
     },
 ]
@@ -153,110 +173,153 @@ KOREA_SOURCES = [
 ALL_SOURCES = GLOBAL_SOURCES + KOREA_SOURCES
 
 # ─────────────────────────────────────────────
-# 필터 키워드 - PhysicalAI/VLA 산업 흐름
+# 필터 키워드
 #
-# [영문 우선순위]
-# 1. "physical AI" / "embodied AI" robotics
-# 2. "humanoid robot" funding / investment / Series
-# 3. "vision language action" / "VLA model" robotics
-# 4. NVIDIA GR00T / Isaac Lab / Cosmos Reason / Newton physics
-# 5. Figure AI / Physical Intelligence / Skild AI / Apptronik
-# 6. Google DeepMind "Gemini Robotics"
-# 7. Tesla Optimus
-# 8. humanoid robot China / Agibot / Unitree / UBTECH
-# 9. "robot foundation model" / "generalist policy"
-# 10. Boston Dynamics Atlas / Electric Atlas
+# [구조 변경]
+# 기존: INCLUDE_KEYWORDS 하나로 정밀 매칭
+# 변경: BROAD_KEYWORDS(광역, 1차) → Claude 랭킹(2차 정제)
 #
-# [한국어 우선순위]
-# 1. 휴머노이드 로봇 + (투자 / 개발 / 출시)
-# 2. 피지컬 AI / Physical AI 한국
-# 3. 레인보우로보틱스 / 삼성 로봇 / 두산로보틱스
-# 4. K-휴머노이드 / 제조 AX / 로봇 파운데이션
-# 5. 로봇 IPO / 로봇 상장 / 로봇 투자
-# 6. KAIST 로봇 / KIST 로봇 / 뉴로메카 / 로보티즈
+# 이유: TechCrunch/VentureBeat는 "Figure raises $675M" 같은 표현을 쓰고
+#       "VLA model", "physical ai" 같은 전문 용어는 잘 안 씀.
+#       광역 키워드로 일단 많이 모아서 Claude가 걸러내는 방식이 더 효과적.
 # ─────────────────────────────────────────────
-INCLUDE_KEYWORDS = [
-    # ── VLA / Physical AI 핵심 ──
-    "physical ai", "physical intelligence",
-    "embodied ai", "embodied intelligence",
-    "vision language action", "vla model", "VLA",
-    "robot foundation model", "generalist policy",
-    "robot learning",
 
-    # ── 주요 기업 / 모델 ──
-    "Figure AI", "Figure robot",
-    "Physical Intelligence", "pi0", "openpi",
-    "Skild AI",
-    "Apptronik",
-    "Sanctuary", "Sanctuary AI",
-    "Boston Dynamics", "Electric Atlas",
-    "Agility", "Agility Robotics",
-    "1X", "1X Technologies",
-    "Unitree", "UBTECH", "Agibot",
-    "Fourier", "Fourier Intelligence",
-    "NVIDIA Isaac", "Isaac Lab", "GR00T", "Cosmos Reason", "Newton physics",
-    "Tesla Optimus", "Optimus robot",
-    "Google DeepMind", "Gemini Robotics",
+# 1차 필터: 넓게 — AI/로봇 관련이면 일단 통과
+# ─────────────────────────────────────────────
+# 필터 키워드 설계 원칙
+#
+# 해외 매체(Bloomberg, FT 등)는 RSS summary가 짧거나 없는 경우가 많아
+# 사실상 제목(title)만으로 필터링된다.
+# → 1차 필터는 최대한 넓게, 2차 정제는 Claude 랭킹 프롬프트에 위임.
+#
+# 핵심 규칙:
+# - 짧고 단순한 단어 위주 (복합 표현, 스페이스 패딩 X)
+# - 제목에 자주 등장하는 표현 중심
+# - 제외 키워드는 "확실히 무관한 것"만 최소화
+# ─────────────────────────────────────────────
 
-    # ── 휴머노이드 / 투자 ──
-    "humanoid", "휴머노이드",
-    "robot investment", "robot funding", "robot startup",
-    "humanoid funding", "humanoid investment",
-    "AI robot", "AI 로봇",
-
-    # ── 국내 기업 / 기관 ──
-    "레인보우로보틱스",
-    "두산로보틱스",
-    "현대로보틱스",
-    "삼성 로봇",
-    "LG 로봇", "클로이",
-    "카카오 로봇",
-    "네이버 로봇",
-    "뉴로메카",
-    "로보티즈",
-    "KAIST 로봇", "KIST 로봇",
-
-    # ── 국내 산업 / 정책 ──
-    "K-휴머노이드",
-    "피지컬 AI",
-    "로봇 파운데이션",
-    "제조 AX",
-    "로봇 IPO", "로봇 상장", "로봇 투자",
-    "로봇 스타트업",
+# 해외 광역 키워드: 단어 단위, 짧게
+BROAD_KEYWORDS_EN = [
+    # 로봇 기본
+    "robot", "humanoid", "robotic", "autonomous",
+    "embodied", "manipulation", "locomotion",
+    # AI 기본 — " ai " 패딩 없이 단순 매칭
+    "ai", "artificial intelligence", "machine learning",
+    "foundation model", "large language model", "llm",
+    # 투자/사업 이벤트
+    "funding", "raises", "raised", "investment",
+    "series a", "series b", "series c", "seed round",
+    "ipo", "acquisition", "acquires", "merger", "partnership", "contract",
+    "startup", "valuation",
+    # 핵심 기업명 — 뉴스 제목에 실제로 나오는 짧은 형태
+    "figure", "nvidia", "deepmind", "openai",
+    "unitree", "ubtech", "agibot", "agility",
+    "apptronik", "sanctuary", "skild",
+    "boston dynamics", "optimus",
+    "physical intelligence",
 ]
 
+# 국내 광역 키워드
+BROAD_KEYWORDS_KO = [
+    "로봇", "인공지능", "자율",
+    "휴머노이드", "매니퓰레이터",
+    "투자", "펀딩", "시리즈", "상장", "ipo", "파트너십", "계약", "수주",
+    "레인보우로보틱스", "두산로보틱스", "현대로보틱스",
+    "삼성로봇", "lg로봇", "클로이",
+    "뉴로메카", "로보티즈",
+    "kaist", "kist",
+    "피지컬ai", "피지컬 ai", "k-휴머노이드",
+]
+
+# 제외 키워드: 확실하게 무관한 것만, 최소화
 EXCLUDE_KEYWORDS = [
-    # 순수 하드웨어/제조
-    "용접 로봇", "산업용 로봇 arm",
-    "CNC", "PLC", "반도체 장비",
-    "수술 로봇 장비", "surgical instrument",
-    # PhysicalAI 무관 AI
-    "챗봇", "chatbot",
-    "text generation", "image generation",
-    "stable diffusion",
-    # 금융/무관
-    "stock market", "crypto",
+    "cryptocurrency", "bitcoin", "ethereum",
+    "stock market", "forex",
+    "stable diffusion", "text-to-image",
+    "CNC machining", "PLC controller",
 ]
 
 def is_relevant(title: str, summary: str) -> bool:
-    text = (title + " " + summary).lower()
+    """
+    1차 광역 필터.
+    - 해외 매체는 summary가 짧거나 없으므로 title 기준으로도 통과 가능하도록 느슨하게.
+    - 제외 키워드에 걸리면 즉시 탈락.
+    - 광역 키워드 중 하나라도 있으면 통과 → Claude가 2차 정제.
+    """
+    title_lower   = title.lower()
+    summary_lower = summary.lower()
+
+    # 제외 키워드
     for kw in EXCLUDE_KEYWORDS:
-        if kw.lower() in text:
+        if kw.lower() in title_lower or kw.lower() in summary_lower:
             return False
-    for kw in INCLUDE_KEYWORDS:
-        if kw.lower() in text:
+
+    # 광역 키워드 — title 단독으로도 체크 (summary 없는 피드 대응)
+    all_broad = BROAD_KEYWORDS_EN + BROAD_KEYWORDS_KO
+    for kw in all_broad:
+        kw_lower = kw.lower()
+        if kw_lower in title_lower:
             return True
+        if kw_lower in summary_lower:
+            return True
+
     return False
+
+
+# ─────────────────────────────────────────────
+# 피드 진단 모드
+# python digest.py --debug 로 실행 시 각 소스 상태 출력
+# ─────────────────────────────────────────────
+def run_debug():
+    """각 RSS 피드의 실제 작동 여부와 기사 수를 출력."""
+    since = (datetime.now(KST) - timedelta(hours=24)).astimezone(timezone.utc)
+    print(f"\n{'='*60}")
+    print(f"[DEBUG] RSS 피드 진단 — since: {since.strftime('%Y-%m-%d %H:%M')} UTC")
+    print(f"{'='*60}\n")
+
+    for source in ALL_SOURCES:
+        try:
+            feed = feedparser.parse(source["url"])
+            total_entries = len(feed.entries)
+
+            # 24시간 이내 기사 수
+            recent = 0
+            no_date = 0
+            relevant = 0
+            for entry in feed.entries:
+                pub = entry.get("published_parsed") or entry.get("updated_parsed")
+                if not pub:
+                    no_date += 1
+                    continue
+                pub_dt = datetime(*pub[:6], tzinfo=timezone.utc)
+                if pub_dt >= since:
+                    recent += 1
+                    title = entry.get("title", "")
+                    summary = entry.get("summary", "")[:500]
+                    if is_relevant(title, summary):
+                        relevant += 1
+
+            status = "✅" if total_entries > 0 else "❌"
+            print(
+                f"{status} [{source['region']}] {source['name']}\n"
+                f"   전체: {total_entries}건 | 24h이내: {recent}건 | "
+                f"날짜없음: {no_date}건 | 필터통과: {relevant}건\n"
+                f"   URL: {source['url']}\n"
+            )
+        except Exception as e:
+            print(f"❌ [{source['region']}] {source['name']} — 오류: {e}\n")
+
+    print(f"{'='*60}")
+    print("[DEBUG] 진단 완료. 위 결과를 보고 피드 교체 여부를 판단하세요.")
+    print(f"{'='*60}\n")
+
 
 # ─────────────────────────────────────────────
 # RSS 수집
-# since = 실행 시각 KST 기준 24시간 전
-# published 없는 기사는 스킵
 # ─────────────────────────────────────────────
 def fetch_items() -> tuple[list[dict], list[dict]]:
-    since = (
-        datetime.now(KST) - timedelta(hours=24)
-    ).astimezone(timezone.utc)
+    since = (datetime.now(KST) - timedelta(hours=24)).astimezone(timezone.utc)
+    print(f"[INFO] 수집 기준: {since.strftime('%Y-%m-%d %H:%M')} UTC 이후")
 
     global_items, korea_items = [], []
     seen = set()
@@ -268,24 +331,32 @@ def fetch_items() -> tuple[list[dict], list[dict]]:
             print(f"[WARN] {source['name']} 수집 실패: {e}")
             continue
 
+        source_count = 0
+
         for entry in feed.entries:
+            if source_count >= MAX_PER_SOURCE:
+                break
+
             title   = entry.get("title", "").strip()
             summary = entry.get("summary", entry.get("description", ""))[:1000]
             link    = entry.get("link", "")
 
-            if link in seen:
+            if not link or link in seen:
                 continue
             seen.add(link)
 
+            # 날짜 없는 기사 스킵
             published = entry.get("published_parsed") or entry.get("updated_parsed")
             if not published:
                 continue
+
             pub_dt = datetime(*published[:6], tzinfo=timezone.utc)
             if pub_dt < since:
                 continue
 
             clean_summary = re.sub(r"<[^>]+>", " ", summary).strip()
 
+            # 1차 광역 필터
             if not is_relevant(title, clean_summary):
                 continue
 
@@ -302,11 +373,14 @@ def fetch_items() -> tuple[list[dict], list[dict]]:
             else:
                 korea_items.append(item)
 
-    print(f"[INFO] 수집: 해외 {len(global_items)}개, 국내 {len(korea_items)}개")
+            source_count += 1
+
+    print(f"[INFO] 1차 수집: 해외 {len(global_items)}개, 국내 {len(korea_items)}개")
     return global_items[:MAX_FETCH], korea_items[:MAX_FETCH]
 
+
 # ─────────────────────────────────────────────
-# Claude 중요도 랭킹
+# Claude 2차 랭킹 (Physical AI 관련도 + 비즈니스 임팩트)
 # ─────────────────────────────────────────────
 def rank_items(items: list[dict], top_n: int, region: str) -> list[dict]:
     if not items:
@@ -320,27 +394,31 @@ def rank_items(items: list[dict], top_n: int, region: str) -> list[dict]:
     for i, item in enumerate(items, 1):
         items_text += f"[{i}] {item['title']}\n{item['summary'][:200]}\n---\n"
 
-    prompt = f"""당신은 Physical AI / 휴머노이드 로봇 산업의 사업 개발 담당자입니다.
-아래 {len(items)}개 ({region}) 기사 중 비즈니스·산업적으로 가장 임팩트 있는 {top_n}개를 선별해주세요.
+    prompt = f"""당신은 Physical AI / 휴머노이드 로봇 산업 전문 애널리스트입니다.
+아래 {len(items)}개 ({region}) 기사 중, 두 가지 기준을 모두 충족하는 상위 {top_n}개를 선별하세요.
 
-━ 높은 우선순위 (비즈니스 임팩트 큰 것) ━
+━ 기준 1: Physical AI / 로봇 관련도 ━
+✅ 휴머노이드 로봇, 로봇 조작/자율주행, VLA/파운데이션 모델 적용
+✅ NVIDIA Isaac / GR00T / Cosmos, Figure AI, Physical Intelligence, Skild AI 등
+✅ 국내: 레인보우로보틱스, 두산로보틱스, 뉴로메카, K-휴머노이드 정책 등
+
+❌ 순수 LLM/챗봇 (로봇 미적용), 반도체 설계, 스마트폰, 클라우드 인프라
+❌ 일반 AI 투자 (로봇·Physical AI와 무관)
+
+━ 기준 2: 비즈니스 임팩트 ━
 ✅ 투자 유치 / 펀딩 / IPO / M&A
-✅ 제품 출시 / 상용화 / 파일럿 계약 / 양산 발표
-✅ 대형 파트너십 / 고객사 계약 (제조·물류·국방 등)
-✅ 주요 기업의 전략 피벗 또는 사업 확장
-✅ 정부 정책 / 규제 변화 (보조금, 로드맵, 표준)
+✅ 제품 출시 / 상용화 / 파일럿 계약 / 양산
+✅ 대형 파트너십 / 정부 정책·보조금
 ✅ 시장 판도를 바꿀 경쟁 구도 변화
 
-━ 낮은 우선순위 (비즈니스 임팩트 낮은 것) ━
-❌ 학술 논문 / 연구소 발표 (상용화 계획 없는 것)
-❌ 단순 기술 벤치마크 / 성능 수치 비교
-❌ 순수 하드웨어 스펙 발표
-❌ 시장 통계·수치만 나열한 리포트
-❌ 이미 알려진 사실의 단순 반복 기사
+❌ 학술 논문 (상용화 계획 없는 것)
+❌ 단순 기술 벤치마크
+❌ 이미 알려진 사실 반복
 
 {items_text}
 
-비즈니스 임팩트가 높은 순서대로 {top_n}개 번호만 콤마로 출력. 예: 2,5,1,3,4
+두 기준을 모두 반영해 중요도 높은 순서대로 {top_n}개 번호만 콤마로 출력.
+예: 2,5,1,3,4
 번호 외 다른 텍스트 없이."""
 
     msg = client.messages.create(
@@ -356,6 +434,7 @@ def rank_items(items: list[dict], top_n: int, region: str) -> list[dict]:
     except Exception as e:
         print(f"[WARN] 랭킹 파싱 실패: {e}")
         return items[:top_n]
+
 
 # ─────────────────────────────────────────────
 # Claude 요약 생성
@@ -412,6 +491,7 @@ JSON 배열만 출력:
 
     return items
 
+
 # ─────────────────────────────────────────────
 # Google Chat 메시지 전송
 # ─────────────────────────────────────────────
@@ -439,17 +519,17 @@ def send_to_chat(global_items: list[dict], korea_items: list[dict]):
         for i, item in enumerate(global_items, 1):
             global_section += item_to_text(item, i) + "\n\n"
     else:
-        global_section = f"━━━ 🌐 *해외 동향* ━━━\n\n📭 {today} 날짜의 해외 최신 기사가 없습니다.\n\n"
+        global_section = f"━━━ 🌐 *해외 동향* ━━━\n\n📭 {today} 기준 해외 Physical AI 관련 새 기사가 없습니다.\n\n"
 
     if korea_items:
         korea_section = "━━━ 🇰🇷 *국내 동향* ━━━\n\n"
         for i, item in enumerate(korea_items, 1):
             korea_section += item_to_text(item, i) + "\n\n"
     else:
-        korea_section = f"━━━ 🇰🇷 *국내 동향* ━━━\n\n📭 {today} 날짜의 국내 최신 기사가 없습니다.\n\n"
+        korea_section = f"━━━ 🇰🇷 *국내 동향* ━━━\n\n📭 {today} 기준 국내 Physical AI 관련 새 기사가 없습니다.\n\n"
 
     if not global_items and not korea_items:
-        full_text = f"🤖 *Physical AI Digest* — {today}\n📭 {today} 날짜의 최신 기사가 없습니다."
+        full_text = f"🤖 *Physical AI Digest* — {today}\n📭 {today} 기준 새로운 기사가 없습니다."
     else:
         full_text = f"{header_text}\n\n{global_section}{korea_section}"
 
@@ -467,10 +547,16 @@ def send_to_chat(global_items: list[dict], korea_items: list[dict]):
         print(f"[ERROR] 전송 실패: {resp.status_code} {resp.text}")
         raise Exception(f"Chat webhook 실패: {resp.status_code}")
 
+
 # ─────────────────────────────────────────────
 # 메인
 # ─────────────────────────────────────────────
 if __name__ == "__main__":
+    if DEBUG_MODE:
+        # 피드 진단만 실행 (Claude API / Webhook 호출 없음)
+        run_debug()
+        sys.exit(0)
+
     print("[START] Physical AI Chat Digest 시작")
 
     global_raw, korea_raw = fetch_items()
