@@ -422,7 +422,7 @@ def rank_items(items: list[dict], top_n: int, region: str) -> list[dict]:
 번호 외 다른 텍스트 없이."""
 
     msg = client.messages.create(
-        model="claude-sonnet-4-20250514",
+        model="claude-sonnet-4-6",
         max_tokens=50,
         messages=[{"role": "user", "content": prompt}],
     )
